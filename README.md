@@ -1,7 +1,7 @@
 # Nihhar-s-vehicle-manual-scraper
 n8n workflow for scraping vehicle manual PDFs and uploading them to cloud storage.
 
-# n8n Vehicle Manual Scraper
+# Car Vehicle Manual Scraper
 
 Automation pipeline for discovering, validating, and collecting vehicle manual PDFs from indexed web sources.
 
