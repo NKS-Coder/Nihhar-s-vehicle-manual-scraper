@@ -1,0 +1,682 @@
+{
+  "name": "Vehicle Manual Scraper",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Vehicle Manual Scraper (2000-2026)\n\n• **Generate Make/Year** – loops through supported brands and year ranges.\n• **Search DezosManuals** – queries catalog/index pages for manuals.\n• **Extract PDF Links** – filters links that match the target brand/year ranges.\n• **Download Manual** – fetches each PDF while skipping broken links.\n• **Upload File** – sends valid manuals to cloud storage.\n\nRun via the **Manual Trigger** to begin collection. Adjust the Function nodes if you need more brands/years.",
+        "height": 420,
+        "width": 520
+      },
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -912,
+        -736
+      ]
+    },
+    {
+      "parameters": {
+        "content": "### Tips & Tweaks\n\n1. **Missing manuals?** The search page might not list every file. Try widening the regex filter in *Extract PDF From Page*.\n2. **Slow site?** Batch the requests with *SplitInBatches* or add a Delay node.\n3. **Storage location** – replace the upload node with your own Google Drive, S3, or other storage.\n4. **Automation** – swap Manual Trigger with Cron for scheduled updates.",
+        "height": 320,
+        "width": 480,
+        "color": 4
+      },
+      "name": "Troubleshooting",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -688,
+        -1056
+      ]
+    },
+    {
+      "parameters": {},
+      "name": "Workflow Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -336,
+        -928
+      ]
+    },
+    {
+      "parameters": {},
+      "name": "Start Manual",
+      "type": "n8n-nodes-base.manualTrigger",
+      "position": [
+        0,
+        -64
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// DezosManuals index page generator\n// GM brands only, starting from year 2000 onwards\n// Output:\n// { make, rangeStart, rangeEnd, catalogUrl }\n\nconst base = \"https://dezosmanuals.com\";\n\nconst catalog = [\n  { make: \"buick\", ranges: [[2010,2019],[2000,2009]] },\n  { make: \"chevrolet\", ranges: [[2010,2019],[2000,2009]] },\n  { make: \"cadillac\", ranges: [[2010,2019],[2000,2009]] },\n  { make: \"gmc\", ranges: [[2010,2019],[2000,2009]] },\n  { make: \"hummer\", ranges: [[2000,2010]] },\n  { make: \"pontiac\", ranges: [[2000,2010]] },\n  { make: \"oldsmobile\", ranges: [[2000,2009]] },\n  { make: \"saturn\", ranges: [[2000,2010]] }\n];\n\nconst out = [];\n\nfor (const entry of catalog) {\n  for (const [start, end] of entry.ranges) {\n    if (start >= 2000) {\n      out.push({\n        json: {\n          make: entry.make,\n          rangeStart: start,\n          rangeEnd: end,\n          catalogUrl: `${base}/${entry.make}-${start}-${end}/`\n        }\n      });\n    }\n  }\n}\n\nreturn out;\n"
+      },
+      "name": "Generate Index URLs",
+      "type": "n8n-nodes-base.function",
+      "position": [
+        224,
+        -64
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 10,
+        "options": {
+          "reset": false
+        }
+      },
+      "name": "Batch Index",
+      "type": "n8n-nodes-base.splitInBatches",
+      "position": [
+        448,
+        -64
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 1
+      },
+      "name": "Wait 1s (index)",
+      "type": "n8n-nodes-base.wait",
+      "position": [
+        672,
+        -64
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{$json.catalogUrl}}",
+        "options": {
+          "allowUnauthorizedCerts": false,
+          "lowercaseHeaders": true,
+          "proxy": "",
+          "timeout": 10000
+        }
+      },
+      "name": "Fetch Index Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        896,
+        -64
+      ],
+      "retryOnFail": true,
+      "alwaysOutputData": false,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "functionCode": "const base = 'https://dezosmanuals.com';\nconst html = $json.body ?? $json.data ?? '';\n\nif (typeof html !== 'string' || !html.trim()) return [];\n\nconst hrefs = [...html.matchAll(/href=[\"']([^\"']+)[\"']/gi)].map(m => m[1]);\n\nconst out = [];\nconst seen = new Set();\n\nfor (let url of hrefs) {\n  if (!url) continue;\n  if (url.startsWith('//')) url = 'https:' + url;\n  else if (url.startsWith('/')) url = base + url;\n\n  if (!url.startsWith(base)) continue;\n  if (url.includes('/wp-json')) continue;\n  if (url.includes('/wp-content/')) continue;\n  if (url.match(/\\.(css|js|png|jpg|jpeg|gif|svg|webp|ico|woff|woff2|ttf)(\\?|#|$)/i)) continue;\n  if (!url.match(/\\/[a-z0-9-]+-\\d{4}-\\d{4}\\/?$/i)) continue;\n\n  url = url.replace(/\\/$/, '') + '/';\n  if (seen.has(url)) continue;\n  seen.add(url);\n\n  out.push({ json: { url } });\n}\n\nreturn out;\n"
+      },
+      "name": "Extract Card Links",
+      "type": "n8n-nodes-base.function",
+      "position": [
+        1120,
+        -64
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "reset": false
+        }
+      },
+      "name": "Batch Links",
+      "type": "n8n-nodes-base.splitInBatches",
+      "position": [
+        1344,
+        -64
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 1
+      },
+      "name": "Wait 1s (link)",
+      "type": "n8n-nodes-base.wait",
+      "position": [
+        1568,
+        -128
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{$json.cardUrl}}",
+              "rightValue": "\\.pdf(\\?|$)",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {
+          "ignoreCase": true,
+          "looseTypeValidation": true
+        }
+      },
+      "name": "Is Direct PDF?",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        1792,
+        -128
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{$json.cardUrl}}",
+        "options": {
+          "allowUnauthorizedCerts": false,
+          "lowercaseHeaders": true,
+          "proxy": "",
+          "timeout": 10000
+        }
+      },
+      "name": "Download PDF Direct",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        2016,
+        -224
+      ],
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "fileName": "=/manuals/{{$json.make}}/{{$json.rangeStart}}-{{$json.rangeEnd}}/{{$json.fileName}}",
+        "options": {
+          "append": false
+        }
+      },
+      "name": "Write PDF Direct",
+      "type": "n8n-nodes-base.writeBinaryFile",
+      "position": [
+        2240,
+        -224
+      ],
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "url": "={{$json.url}}",
+        "options": {
+          "allowUnauthorizedCerts": false,
+          "lowercaseHeaders": true,
+          "redirect": {
+            "redirect": {}
+          },
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          },
+          "proxy": "",
+          "timeout": 10000
+        }
+      },
+      "name": "Fetch Detail Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        2016,
+        -32
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "const base = 'https://dezosmanuals.com';\nconst out = [];\n\nfor (const item of items) {\n  const html = item.json.body ?? item.json.data ?? item.json.response ?? item.json.html ?? '';\n  if (typeof html !== 'string' || !html.trim()) continue;\n\n  const matches = [...html.matchAll(/href=[\"']([^\"']+\\.pdf[^\"']*)[\"']/gi)];\n\n  for (const m of matches) {\n    let pdfUrl = (m[1] || '').trim();\n    if (!pdfUrl) continue;\n\n    if (pdfUrl.startsWith('//')) pdfUrl = 'https:' + pdfUrl;\n    else if (pdfUrl.startsWith('/')) pdfUrl = base + pdfUrl;\n    if (!pdfUrl.startsWith('http')) continue;\n\n    const fileName = decodeURIComponent((pdfUrl.split('/').pop() || 'manual.pdf').split('?')[0]);\n    out.push({ json: { ...item.json, pdfUrl, fileName } });\n  }\n}\n\nreturn out;\n"
+      },
+      "name": "Extract PDF From Page",
+      "type": "n8n-nodes-base.function",
+      "position": [
+        2240,
+        -32
+      ],
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "leftValue": "={{$json.pdfUrl}}",
+              "rightValue": "=^https?:\\/\\/",
+              "operator": {
+                "type": "string",
+                "operation": "regex"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2464,
+        -32
+      ],
+      "name": "Valid PDF URL?"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ parseInt(($json.fileName?.match(/\\b(19|20)\\d{2}\\b/)||[])[0] || '0', 10) }}",
+              "rightValue": 2000,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            },
+            {
+              "leftValue": "={{ parseInt(($json.fileName?.match(/\\b(19|20)\\d{2}\\b/)||[])[0] || '0', 10) }}",
+              "rightValue": 2026,
+              "operator": {
+                "type": "number",
+                "operation": "lte"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2688,
+        -32
+      ],
+      "name": "Year Range Checker"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "pdfUrl",
+              "value": "={{$json.pdfUrl}}",
+              "type": "string"
+            },
+            {
+              "name": "fileName",
+              "value": "={{$json.fileName}}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2912,
+        -32
+      ],
+      "name": "Set Fields"
+    },
+    {
+      "parameters": {
+        "amount": 2
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        3136,
+        -32
+      ],
+      "name": "Wait Before Download"
+    },
+    {
+      "parameters": {
+        "url": "={{$json.pdfUrl}}",
+        "options": {
+          "allowUnauthorizedCerts": false,
+          "lowercaseHeaders": true,
+          "redirect": {
+            "redirect": {}
+          },
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          },
+          "proxy": "",
+          "timeout": 60000
+        }
+      },
+      "name": "Download PDF Final",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        3360,
+        -32
+      ],
+      "retryOnFail": true,
+      "waitBetweenTries": 4000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ !!$binary?.data }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            },
+            {
+              "leftValue": "={{$json.pdfUrl}}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        3568,
+        -32
+      ],
+      "name": "Binary Exists?"
+    },
+    {
+      "parameters": {
+        "driveId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_YOUR_DRIVE",
+          "mode": "list",
+          "cachedResultName": "Your Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_YOUR_FOLDER_ID",
+          "mode": "list",
+          "cachedResultName": "Target Folder"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        3808,
+        -32
+      ],
+      "name": "Upload File",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Google Drive OAuth2"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Start Manual": {
+      "main": [
+        [
+          {
+            "node": "Generate Index URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Index URLs": {
+      "main": [
+        [
+          {
+            "node": "Batch Index",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Batch Index": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Wait 1s (index)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 1s (index)": {
+      "main": [
+        [
+          {
+            "node": "Fetch Index Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Index Page": {
+      "main": [
+        [
+          {
+            "node": "Extract Card Links",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Card Links": {
+      "main": [
+        [
+          {
+            "node": "Batch Links",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Batch Links": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Wait 1s (link)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 1s (link)": {
+      "main": [
+        [
+          {
+            "node": "Is Direct PDF?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Direct PDF?": {
+      "main": [
+        [
+          {
+            "node": "Download PDF Direct",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fetch Detail Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download PDF Direct": {
+      "main": [
+        [
+          {
+            "node": "Write PDF Direct",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Detail Page": {
+      "main": [
+        [
+          {
+            "node": "Extract PDF From Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract PDF From Page": {
+      "main": [
+        [
+          {
+            "node": "Valid PDF URL?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid PDF URL?": {
+      "main": [
+        [
+          {
+            "node": "Year Range Checker",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Year Range Checker": {
+      "main": [
+        [
+          {
+            "node": "Set Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Fields": {
+      "main": [
+        [
+          {
+            "node": "Wait Before Download",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Before Download": {
+      "main": [
+        [
+          {
+            "node": "Download PDF Final",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download PDF Final": {
+      "main": [
+        [
+          {
+            "node": "Binary Exists?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Binary Exists?": {
+      "main": [
+        [
+          {
+            "node": "Upload File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload File": {
+      "main": [
+        [
+          {
+            "node": "Batch Links",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  },
+  "tags": []
+}
